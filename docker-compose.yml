@@ -1,0 +1,111 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: soc2-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soc2}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc2}
+      POSTGRES_DB: ${POSTGRES_DB:-soc2_reviewer}
+    # HNSW index builds on pgvector are memory-hungry; bump shared_buffers and
+    # maintenance_work_mem so concurrent chunk inserts don't thrash.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "work_mem=16MB"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - soc2-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc2} -d ${POSTGRES_DB:-soc2_reviewer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 1g
+    mem_reservation: 512m
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: soc2-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-soc2}:${POSTGRES_PASSWORD:-soc2}@postgres:5432/${POSTGRES_DB:-soc2_reviewer}
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      # Cap PyMuPDF/tokenizer thread fan-out on small hosts.
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      # HuggingFace model cache (sentence-transformers weights).
+      HF_HOME: /app/.cache/huggingface
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Persist the sentence-transformers model download (~90 MB) so the
+      # first upload after a rebuild doesn't have to re-fetch weights.
+      - soc2-modelcache:/app/.cache
+    # Upload pipeline (PyMuPDF + regex + embeddings + SQLAlchemy) can briefly
+    # touch ~1.2 GB on large (200+ page) PDFs when sentence-transformers is
+    # loaded. Cap so an OOM is explicit via `docker events` / exit code 137
+    # instead of silently racing Postgres.
+    mem_limit: 2g
+    mem_reservation: 1g
+
+  # --- Optional: local LLM + embedding server -----------------------------
+  # Enable with: `docker compose --profile ollama up`
+  # After first start, pull models once with:
+  #   docker exec -it soc2-ollama ollama pull llama3.2:3b
+  #   docker exec -it soc2-ollama ollama pull nomic-embed-text
+  # Then restart the backend so it picks up the new OLLAMA_BASE_URL.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: soc2-ollama
+    restart: unless-stopped
+    profiles: ["ollama"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - soc2-ollama:/root/.ollama
+    # Llama-3.2-3B loads comfortably in ~3 GB RAM; bump for larger models.
+    mem_limit: 6g
+    mem_reservation: 3g
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: soc2-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE: /api/backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    mem_limit: 512m
+
+volumes:
+  soc2-pgdata:
+    driver: local
+  soc2-modelcache:
+    driver: local
+  soc2-ollama:
+    driver: local
