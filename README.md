@@ -318,7 +318,7 @@ docker compose logs -f         # tail the boot sequence
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE) once added.
+MIT — see [`LICENSE`](LICENSE).
 
 <br />
 
