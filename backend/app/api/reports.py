@@ -63,7 +63,9 @@ async def upload_report(
 
     # Read & validate size
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    data = await file.read()
+    # Read at most one byte beyond the limit so oversized uploads are rejected
+    # without buffering the entire request payload in application memory.
+    data = await file.read(max_bytes + 1)
     if len(data) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     if len(data) > max_bytes:
