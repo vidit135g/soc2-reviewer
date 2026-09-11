@@ -285,10 +285,13 @@ def chunk_text(
     overlap: int | None = None,
 ) -> list[str]:
     """Split text into overlapping chunks, attempting to respect paragraph breaks."""
-    size = chunk_size or settings.chunk_size
-    ov = overlap or settings.chunk_overlap
+    size = settings.chunk_size if chunk_size is None else chunk_size
+    ov = settings.chunk_overlap if overlap is None else overlap
     if not text:
         return []
+    if size <= 0:
+        raise ValueError("chunk_size must be positive")
+    ov = max(0, min(ov, size - 1))
 
     # First split on blank lines
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
@@ -309,9 +312,9 @@ def chunk_text(
             while start < len(para):
                 end = min(start + size, len(para))
                 chunks.append(para[start:end])
+                if end == len(para):
+                    break
                 start = end - ov
-                if start < 0:
-                    start = 0
             buffer = ""
     if buffer:
         chunks.append(buffer)
@@ -340,10 +343,11 @@ def iter_chunks_with_pages(
     Safety: guarantees forward progress per iteration even if a caller passes
     ``overlap >= chunk_size`` (which would otherwise produce an infinite loop).
     """
-    size = chunk_size or settings.chunk_size
-    ov = overlap or settings.chunk_overlap
+    size = settings.chunk_size if chunk_size is None else chunk_size
+    ov = settings.chunk_overlap if overlap is None else overlap
     if size <= 0:
-        size = 1
+        raise ValueError("chunk_size must be positive")
+    ov = max(0, ov)
     # Stride must always advance by at least 1 char; cap overlap to size-1.
     if ov >= size:
         ov = max(0, size - 1)
